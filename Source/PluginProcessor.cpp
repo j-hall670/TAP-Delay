@@ -94,6 +94,7 @@ void TAPDelayAudioProcessor::changeProgramName (int index, const juce::String& n
 void TAPDelayAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     mDelayBuffer.setSize (getTotalNumInputChannels(), 2.0 * (samplesPerBlock + sampleRate), false, true);
+    mSampleRate = sampleRate; 
 }
 
 void TAPDelayAudioProcessor::releaseResources()
@@ -137,40 +138,62 @@ void TAPDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+    // Declaring these for readability
+    const int bufferLength = buffer.getNumSamples();
+    const int delayBufferLength = mDelayBuffer.getNumSamples();
 
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
-        // Declaring these for readability
-        const int bufferLength = buffer.getNumSamples();
-        const int delayBufferLength = mDelayBuffer.getNumSamples();
-
         const float* bufferData = buffer.getReadPointer (channel);
         const float* delayBufferData = mDelayBuffer.getReadPointer (channel);
 
-        // Copy data from main buffer to delay buffer - this is a bit fiddly because the buffers are different lengths
+        fillDelayBuffer (channel, bufferLength, delayBufferLength, bufferData, delayBufferData);
+        getFromDelayBuffer (buffer, channel, bufferLength, delayBufferLength, bufferData, delayBufferData);
+    }
+
+    mWritePosition += bufferLength; // When buffer has been processed, move write position to the next value so it becomes e.g. 513 not 0 again
+    mWritePosition %= delayBufferLength; // Look below for explanation
+    /*
+    This has the effect of wrapping the value back around to 0.
+    So when delayBufferLength gets to its maximum value, mWritePosition will become the same number as delayBufferLength
+    So modulo divides mWritePosition by delayBufferLength which is the same as dividing it by itself.
+    Dividing by itself = 1 with remainder 0.
+    So mWritePosition becomes 0.
+    */
+}
+
+void TAPDelayAudioProcessor::fillDelayBuffer (int channel, const int bufferLength, const int delayBufferLength, const float* bufferData, const float* delayBufferData)
+{
+    // Copy data from main buffer to delay buffer - this is a bit fiddly because the buffers are different lengths
         // This if alone won't fill the buffer because buffer is smaller than mDelayBuffer 
-        if (delayBufferLength > bufferLength + mWritePosition)
-        {
-            mDelayBuffer.copyFromWithRamp (channel, mWritePosition, bufferData, bufferLength, 0.8, 0.8);
-        }
-        // So we have to catch the rest of them - look at TAP delay pt 1 tutorial for explanation of this
-        else 
-        {
-            const int bufferRemaining = delayBufferLength - mWritePosition; // This is the number of values left to move after the if above ^
+    if (delayBufferLength > bufferLength + mWritePosition)
+    {
+        mDelayBuffer.copyFromWithRamp(channel, mWritePosition, bufferData, bufferLength, 0.8, 0.8);
+    }
+    // So we have to catch the rest of them - look at TAP delay pt 1 tutorial for explanation of this
+    else
+    {
+        const int bufferRemaining = delayBufferLength - mWritePosition; // This is the number of values left to move after the if above ^
 
-            mDelayBuffer.copyFromWithRamp (channel, mWritePosition, bufferData + bufferRemaining, bufferRemaining, 0.8, 0.8);
-            mDelayBuffer.copyFromWithRamp (channel, 0, bufferData + bufferRemaining, bufferLength - bufferRemaining, 0.8, 0.8); // Wrap to start of buffer
-        }
+        mDelayBuffer.copyFromWithRamp(channel, mWritePosition, bufferData + bufferRemaining, bufferRemaining, 0.8, 0.8);
+        mDelayBuffer.copyFromWithRamp(channel, 0, bufferData + bufferRemaining, bufferLength - bufferRemaining, 0.8, 0.8); // Wrap to start of buffer
+    }
+}
 
-        mWritePosition += bufferLength; // When buffer has been processed, move write position to the next value so it becomes e.g. 513 not 0 again
-        mWritePosition %= delayBufferLength; // Look below for explanation
-        /*
-        This has the effect of wrapping the value back around to 0.
-        So when delayBufferLength gets to its maximum value, mWritePosition will become the same number as delayBufferLength
-        So modulo divides mWritePosition by delayBufferLength which is the same as dividing it by itself.
-        Dividing by itself = 1 with remainder 0.
-        So mWritePosition becomes 0.
-        */
+void TAPDelayAudioProcessor::getFromDelayBuffer (juce::AudioBuffer<float>& buffer, int channel, const int bufferLength, const int delayBufferLength, const float* bufferData, const float* delayBufferData)
+{
+    int delayTime = 500;
+    const int readPosition = static_cast<int> (delayBufferLength + mWritePosition - (mSampleRate * delayTime / 1000)) % delayBufferLength;
+
+    if (delayBufferLength > bufferLength + readPosition)
+    {
+        buffer.addFrom(channel, 0, delayBufferData + readPosition, bufferLength);
+    }
+    else
+    {
+        const int bufferRemaining = delayBufferLength - readPosition;
+        buffer.addFrom (channel, 0, delayBufferData + readPosition, bufferRemaining);
+        buffer.addFrom(channel, bufferRemaining, delayBufferData, bufferLength - bufferRemaining);
     }
 }
 
