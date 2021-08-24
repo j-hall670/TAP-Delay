@@ -146,9 +146,11 @@ void TAPDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     {
         const float* bufferData = buffer.getReadPointer (channel);
         const float* delayBufferData = mDelayBuffer.getReadPointer (channel);
+        float* dryBuffer = buffer.getWritePointer (channel);
 
         fillDelayBuffer (channel, bufferLength, delayBufferLength, bufferData, delayBufferData);
         getFromDelayBuffer (buffer, channel, bufferLength, delayBufferLength, bufferData, delayBufferData);
+        feedbackDelay (channel, bufferLength, delayBufferLength, dryBuffer);
     }
 
     mWritePosition += bufferLength; // When buffer has been processed, move write position to the next value so it becomes e.g. 513 not 0 again
@@ -164,11 +166,13 @@ void TAPDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 
 void TAPDelayAudioProcessor::fillDelayBuffer (int channel, const int bufferLength, const int delayBufferLength, const float* bufferData, const float* delayBufferData)
 {
+    const float gain = 0.3;
+
     // Copy data from main buffer to delay buffer - this is a bit fiddly because the buffers are different lengths
         // This if alone won't fill the buffer because buffer is smaller than mDelayBuffer 
     if (delayBufferLength > bufferLength + mWritePosition)
     {
-        mDelayBuffer.copyFromWithRamp(channel, mWritePosition, bufferData, bufferLength, 0.8, 0.8);
+        mDelayBuffer.copyFromWithRamp(channel, mWritePosition, bufferData, bufferLength, gain, gain);
     }
     // So we have to catch the rest of them - look at TAP delay pt 1 tutorial for explanation of this
     else
@@ -182,18 +186,33 @@ void TAPDelayAudioProcessor::fillDelayBuffer (int channel, const int bufferLengt
 
 void TAPDelayAudioProcessor::getFromDelayBuffer (juce::AudioBuffer<float>& buffer, int channel, const int bufferLength, const int delayBufferLength, const float* bufferData, const float* delayBufferData)
 {
-    int delayTime = 500;
+    int delayTime = 200;
     const int readPosition = static_cast<int> (delayBufferLength + mWritePosition - (mSampleRate * delayTime / 1000)) % delayBufferLength;
 
     if (delayBufferLength > bufferLength + readPosition)
     {
-        buffer.addFrom(channel, 0, delayBufferData + readPosition, bufferLength);
+        buffer.copyFrom(channel, 0, delayBufferData + readPosition, bufferLength);
     }
     else
     {
         const int bufferRemaining = delayBufferLength - readPosition;
-        buffer.addFrom (channel, 0, delayBufferData + readPosition, bufferRemaining);
-        buffer.addFrom(channel, bufferRemaining, delayBufferData, bufferLength - bufferRemaining);
+        buffer.copyFrom (channel, 0, delayBufferData + readPosition, bufferRemaining);
+        buffer.copyFrom(channel, bufferRemaining, delayBufferData, bufferLength - bufferRemaining);
+    }
+}
+
+void TAPDelayAudioProcessor::feedbackDelay (int channel, const int bufferLength, const int delayBufferLength, float* dryBuffer)
+{
+    if (delayBufferLength > bufferLength + mWritePosition)
+    {
+        mDelayBuffer.addFromWithRamp (channel, mWritePosition, dryBuffer, bufferLength, 0.8, 0.8);
+    }
+    else
+    {
+        const int bufferRemaining = delayBufferLength - mWritePosition;
+
+        mDelayBuffer.addFromWithRamp (channel, bufferRemaining, dryBuffer, bufferRemaining, 0.8, 0.8);
+        mDelayBuffer.addFromWithRamp (channel, 0, dryBuffer, bufferLength - bufferRemaining, 0.8, 0.8);
     }
 }
 
